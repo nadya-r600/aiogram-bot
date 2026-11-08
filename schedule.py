@@ -68,33 +68,25 @@ SCHEDULE = {
 
 DAYS_RU = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
 
-
 def get_week_parity():
     today = date.today()
     
-    # УКАЖИ ЗДЕСЬ ДАТУ ПОНЕДЕЛЬНИКА, КОГДА НАЧАЛАСЬ ТЕКУЩАЯ (ИЛИ ЛЮБАЯ) НЕЧЁТНАЯ НЕДЕЛЯ
-    # Сейчас я поставил сегодняшний понедельник (например, 16 ноября 2026)
+    # УКАЖИ ЗДЕСЬ ДАТУ ЛЮБОГО ПОНЕДЕЛЬНИКА, КОГДА ИДЕТ НЕЧЁТНАЯ НЕДЕЛЯ
     start_minus_week = date(2026, 11, 16) 
     
-    # Находим понедельник текущей недели
     monday_of_current_week = today - timedelta(days=today.weekday())
-    
-    # Считаем, сколько недель прошло
     delta_days = (monday_of_current_week - start_minus_week).days
     weeks_passed = delta_days // 7
     
-    # Если прошло чётное количество недель — значит, сейчас нечётная (потому что мы пляшем от нечётной)
     if weeks_passed % 2 == 0:
         return "-"
     else:
         return "+"
 
-
 async def get_schedule_for_date(target_date):
     weekday = target_date.weekday()
     day_data = SCHEDULE.get(weekday, {})
     
-    # Определяем, какая неделя идет СЕЙЧАС (на сегодняшний день)
     current_parity = get_week_parity()
     
     if "both" in day_data:
