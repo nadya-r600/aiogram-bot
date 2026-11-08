@@ -480,4 +480,128 @@ async def cb_imp_add(cb: CallbackQuery, state: FSMContext):
 async def imp_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(ImportantForm.comment)
-    await
+    await message.answer("💬 Комментарий (что готовить):")
+
+@router.message(ImportantForm.comment)
+async def imp_comment(message: Message, state: FSMContext):
+    await state.update_data(comment=message.text)
+    await state.set_state(ImportantForm.date)
+    await message.answer("📅 Дата события (ГГГГ-ММ-ДД):")
+
+@router.message(ImportantForm.date)
+async def imp_date(message: Message, state: FSMContext):
+    try:
+        datetime.strptime(message.text, "%Y-%m-%d")
+    except ValueError:
+        await message.answer("Неверный формат. Пример: 2026-11-20")
+        return
+    data = await state.get_data()
+    await add_important(data["subject"], data["title"], data["comment"], message.text)
+    await state.clear()
+    
+    await message.answer(
+        f"✅ Важное добавлено по «{data['subject']}».",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚠️ Посмотреть всё важное", callback_data="all_important")],
+            [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="main_menu")]
+        ])
+    )
+
+@router.callback_query(F.data.startswith("imp_list:"))
+async def cb_imp_list(cb: CallbackQuery):
+    idx = int(cb.data.split(":")[1])
+    subj = SUBJECTS[idx]
+    rows = await get_important(subj)
+    
+    kb_back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data=f"subj:{idx}")]])
+    
+    if not rows:
+        await cb.message.edit_text(f"По «{subj}» важного нет.", reply_markup=kb_back)
+    else:
+        text = f"📌 <b>Важное по «{subj}»:</b>\n\n"
+        buttons = []
+        for item_id, s, title, comment, d in rows:
+            text += f"[{item_id}] <b>{title}</b>\n   {comment or ''}\n   {d or ''}\n\n"
+            buttons.append([InlineKeyboardButton(text=f"🗑 Удалить запись [{item_id}]", callback_data=f"imp_del:{item_id}")])
+        
+        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"subj:{idx}")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await cb.answer()
+
+# --- ИЗМЕНЕНИЕ РАСПИСАНИЯ ---
+@router.callback_query(F.data == "edit_sched")
+async def cb_edit_sched(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(OverrideForm.date)
+    await cb.message.answer("✏️ Введи дату занятия (ГГГГ-ММ-ДД):")
+    await cb.answer()
+
+@router.message(OverrideForm.date)
+async def ov_date(message: Message, state: FSMContext):
+    try:
+        datetime.strptime(message.text, "%Y-%m-%d")
+    except ValueError:
+        await message.answer("Неверный формат. Пример: 2026-11-15")
+        return
+    await state.update_data(date=message.text)
+    await state.set_state(OverrideForm.subject)
+    await message.answer("Какой предмет? (напиши название как в расписании)")
+
+@router.message(OverrideForm.subject)
+async def ov_subject(message: Message, state: FSMContext):
+    await state.update_data(subject=message.text)
+    await state.set_state(OverrideForm.action)
+    await message.answer("Что произошло?\nНапиши: <b>отмена</b>, <b>перенос</b> или <b>добавить</b>", parse_mode="HTML")
+
+@router.message(OverrideForm.action)
+async def ov_action(message: Message, state: FSMContext):
+    action_map = {"отмена": "cancel", "перенос": "move", "добавить": "add"}
+    act = action_map.get(message.text.lower().strip())
+    if not act:
+        await message.answer("Напиши: отмена / перенос / добавить")
+        return
+    await state.update_data(action=act)
+    if act in ["move", "add"]:
+        await state.set_state(OverrideForm.new_date)
+        await message.answer("На какую дату? ГГГГ-ММ-ДД")
+    else:
+        await state.set_state(OverrideForm.comment)
+        await message.answer("Комментарий (например: НО МЕНЕДЖМЕНТА НЕ БУДЕТ, или напиши «-»):")
+
+@router.message(OverrideForm.new_date)
+async def ov_new_date(message: Message, state: FSMContext):
+    try:
+        datetime.strptime(message.text, "%Y-%m-%d")
+    except ValueError:
+        await message.answer("Неверный формат. Пример: 2026-11-15")
+        return
+    await state.update_data(new_date=message.text)
+    await state.set_state(OverrideForm.comment)
+    await message.answer("Комментарий (можно «-»):")
+
+@router.message(OverrideForm.comment)
+async def ov_comment(message: Message, state: FSMContext):
+    data = await state.get_data()
+    comment = None if message.text.strip() == "-" else message.text
+    await add_override(data["date"], data["subject"], data["action"], data.get("new_date"), comment)
+    await state.clear()
+    await message.answer("✅ Изменение расписания сохранено.", reply_markup=main_menu_keyboard())
+
+# --- ПОИСК ПО ТЕКСТУ ---
+@router.message(F.text)
+async def handle_text(message: Message):
+    text = message.text.lower()
+    triggers = ["пришли", "отправь", "дай", "скинь", "найди", "покажи"]
+    if any(t in text for t in triggers):
+        keyword = text
+        for t in triggers:
+            keyword = keyword.replace(t, "")
+        keyword = keyword.replace("мне", "").replace("по", "").strip()
+        files = await search_files_by_keyword(keyword)
+        if not files:
+            await message.answer(f"Ничего не нашёл по «{keyword}».")
+            return
+        for file_id, name in files:
+            await message.answer_document(file_id, caption=name)
+        return
+    await message.answer("Я тебя не понял. Воспользуйся меню /start.", reply_markup=main_menu_keyboard())
