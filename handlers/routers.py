@@ -261,41 +261,29 @@ async def cb_sched_day(cb: CallbackQuery):
     await cb.answer()
 
 async def send_schedule(message: Message, target_date: date, is_edit=False):
-    weekday = target_date.weekday()
-    day_name = DAYS_RU[weekday]
+    # Теперь получаем 4 переменные (добавилась current_parity)
+    day_name, current_parity, subjects, overrides = await get_schedule_for_date(target_date)
+    
     date_str = target_date.strftime("%d.%m.%Y")
-    day_data = SCHEDULE.get(weekday, {})
     
-    if "both" in day_data:
-        subj_plus = day_data["both"]
-        subj_minus = day_data["both"]
+    # Определяем текст для текущей недели
+    if current_parity == "+":
+        parity_text = "🟢 <b>Сейчас идёт: Чётная неделя</b>"
+        # Если сейчас чётная, показываем её, а нечётную прячем
+        subj_to_show = SCHEDULE[target_date.weekday()].get("+", SCHEDULE[target_date.weekday()].get("both", []))
     else:
-        subj_plus = day_data.get("+", [])
-        subj_minus = day_data.get("-", [])
+        parity_text = "🔴 <b>Сейчас идёт: Нечётная неделя</b>"
+        # Если сейчас нечётная, показываем её
+        subj_to_show = SCHEDULE[target_date.weekday()].get("-", SCHEDULE[target_date.weekday()].get("both", []))
         
-    overrides = await get_overrides_for_date(target_date.isoformat())
+    lines = [f"📅 <b>{day_name}, {date_str}</b>"]
+    lines.append(parity_text)
+    lines.append("") # пустая строка для отступа
     
-    lines = [f"📅 <b>{day_name}, {date_str}</b>\n"]
-    
-    lines.append("🟢 <b>Чётная неделя:</b>")
-    if not subj_plus:
+    if not subjects:
         lines.append("Занятий нет 🎉")
     else:
-        for i, s in enumerate(subj_plus, 1):
-            is_cancel = False
-            for subj, action, _, comment in overrides:
-                if action == "cancel" and subj.lower() in s.lower():
-                    lines.append(f"❌ <s>{i}. {s}</s> — {comment or 'Отменено'}")
-                    is_cancel = True
-                    break
-            if not is_cancel:
-                lines.append(f"{i}. {s}")
-                
-    lines.append("\n🔴 <b>Нечётная неделя:</b>")
-    if not subj_minus:
-        lines.append("Занятий нет 🎉")
-    else:
-        for i, s in enumerate(subj_minus, 1):
+        for i, s in enumerate(subjects, 1):
             is_cancel = False
             for subj, action, _, comment in overrides:
                 if action == "cancel" and subj.lower() in s.lower():
@@ -319,7 +307,6 @@ async def send_schedule(message: Message, target_date: date, is_edit=False):
         await message.edit_text(text, parse_mode="HTML", reply_markup=back_to_sched_keyboard())
     else:
         await message.answer(text, parse_mode="HTML", reply_markup=back_to_sched_keyboard())
-
 @router.callback_query(F.data.startswith("upload:"))
 async def cb_upload(cb: CallbackQuery):
     idx = int(cb.data.split(":")[1])
