@@ -13,7 +13,7 @@ from database import (
     add_important, get_important, delete_important,
     add_override, get_overrides_for_date
 )
-from schedule import SCHEDULE, get_schedule_for_date, DAYS_RU
+from schedule import SCHEDULE, get_schedule_for_date, DAYS_RU, get_week_parity
 
 router = Router()
 
@@ -32,6 +32,7 @@ SUBJECTS_INFO = {
 SUBJECTS = list(SUBJECTS_INFO.keys())
 user_subject = {}
 
+# --- СОСТОЯНИЯ ---
 class HWForm(StatesGroup):
     subject = State()
     task = State()
@@ -50,6 +51,7 @@ class OverrideForm(StatesGroup):
     new_date = State()
     comment = State()
 
+# --- КЛАВИАТУРЫ ---
 def main_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📚 Предметы", callback_data="menu_subjects")],
@@ -112,6 +114,7 @@ def back_to_sched_keyboard():
         [InlineKeyboardButton(text="⬅️ К выбору дня", callback_data="menu_schedule")]
     ])
 
+# --- КОМАНДЫ ---
 @router.message(Command("start", ignore_case=True))
 async def cmd_start(message: Message):
     await message.answer("👋 Привет! Я твой учебный помощник.\n\nВыбери действие:", reply_markup=main_menu_keyboard())
@@ -132,6 +135,7 @@ async def cmd_important(message: Message):
 async def cmd_sched(message: Message):
     await message.answer("📅 На какой день посмотреть расписание?", reply_markup=schedule_menu_keyboard())
 
+# --- ГЛАВНОЕ МЕНЮ ---
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(cb: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -160,6 +164,7 @@ async def cb_subject(cb: CallbackQuery):
     await cb.message.edit_text(text, parse_mode="HTML", reply_markup=subject_menu(idx))
     await cb.answer()
 
+# --- ПРОСМОТР ДЗ И ВАЖНОГО (ГЛОБАЛЬНО) ---
 async def show_all_homework(target):
     rows = await get_homework()
     if not rows:
@@ -213,6 +218,7 @@ async def cb_all_hw(cb: CallbackQuery):
 async def cb_all_imp(cb: CallbackQuery):
     await show_all_important(cb)
 
+# --- ОБРАБОТЧИКИ КНОПОК УДАЛЕНИЯ/ВЫПОЛНЕНИЯ ---
 @router.callback_query(F.data.startswith("hw_del:"))
 async def cb_hw_del(cb: CallbackQuery):
     hw_id = int(cb.data.split(":")[1])
@@ -234,6 +240,7 @@ async def cb_imp_del(cb: CallbackQuery):
     await cb.answer("🗑 Запись удалена!")
     await show_all_important(cb)
 
+# --- РАСПИСАНИЕ ---
 @router.callback_query(F.data == "menu_schedule")
 async def cb_menu_schedule(cb: CallbackQuery):
     await cb.message.edit_text("📅 На какой день посмотреть расписание?", reply_markup=schedule_menu_keyboard())
@@ -266,14 +273,12 @@ async def send_schedule(message: Message, target_date: date, is_edit=False):
     date_str = target_date.strftime("%d.%m.%Y")
     day_data = SCHEDULE.get(weekday, {})
     
-    # Получаем текущую неделю (для плашки вверху)
     current_parity = get_week_parity()
     if current_parity == "+":
         current_week_text = "🟢 <b>Сейчас идёт: Чётная неделя</b>"
     else:
         current_week_text = "🔴 <b>Сейчас идёт: Нечётная неделя</b>"
 
-    # Разделяем пары на чётные и нечётные
     if "both" in day_data:
         subj_plus = day_data["both"]
         subj_minus = day_data["both"]
@@ -283,12 +288,10 @@ async def send_schedule(message: Message, target_date: date, is_edit=False):
         
     overrides = await get_overrides_for_date(target_date.isoformat())
     
-    # Формируем сообщение
     lines = [f"📅 <b>{day_name}, {date_str}</b>"]
-    lines.append(current_week_text) # Добавляем строчку про текущую неделю
-    lines.append("") # Пустая строка
+    lines.append(current_week_text)
+    lines.append("")
     
-    # Блок чётной недели
     lines.append("🟢 <b>Чётная неделя:</b>")
     if not subj_plus:
         lines.append("Занятий нет 🎉")
@@ -303,7 +306,6 @@ async def send_schedule(message: Message, target_date: date, is_edit=False):
             if not is_cancel:
                 lines.append(f"{i}. {s}")
                 
-    # Блок нечётной недели
     lines.append("\n🔴 <b>Нечётная неделя:</b>")
     if not subj_minus:
         lines.append("Занятий нет 🎉")
@@ -318,7 +320,6 @@ async def send_schedule(message: Message, target_date: date, is_edit=False):
             if not is_cancel:
                 lines.append(f"{i}. {s}")
                 
-    # Дополнительные изменения (переносы)
     other = [o for o in overrides if o[1] != "cancel"]
     if other:
         lines.append("\n⚠️ <b>Изменения:</b>")
@@ -329,11 +330,12 @@ async def send_schedule(message: Message, target_date: date, is_edit=False):
                 lines.append(f"➕ {subj} — добавлено. {comment or ''}")
                 
     text = "\n".join(lines)
-    
     if is_edit:
         await message.edit_text(text, parse_mode="HTML", reply_markup=back_to_sched_keyboard())
     else:
         await message.answer(text, parse_mode="HTML", reply_markup=back_to_sched_keyboard())
+
+# --- ФАЙЛЫ (ПРОСМОТР И УДАЛЕНИЕ) ---
 @router.callback_query(F.data.startswith("upload:"))
 async def cb_upload(cb: CallbackQuery):
     idx = int(cb.data.split(":")[1])
@@ -406,6 +408,7 @@ async def h_photo(message: Message):
     await save_file(subj, message.photo[-1].file_id, "photo.jpg", "photo")
     await message.answer(f"✅ Картинка сохранена для «{subj}».", reply_markup=main_menu_keyboard())
 
+# --- ДОБАВЛЕНИЕ ДЗ ---
 @router.callback_query(F.data.startswith("hw_add:"))
 async def cb_hw_add(cb: CallbackQuery, state: FSMContext):
     idx = int(cb.data.split(":")[1])
@@ -464,6 +467,7 @@ async def cb_hw_list(cb: CallbackQuery):
         await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
     await cb.answer()
 
+# --- ДОБАВЛЕНИЕ ВАЖНОГО ---
 @router.callback_query(F.data.startswith("imp_add:"))
 async def cb_imp_add(cb: CallbackQuery, state: FSMContext):
     idx = int(cb.data.split(":")[1])
@@ -476,126 +480,4 @@ async def cb_imp_add(cb: CallbackQuery, state: FSMContext):
 async def imp_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(ImportantForm.comment)
-    await message.answer("💬 Комментарий (что готовить):")
-
-@router.message(ImportantForm.comment)
-async def imp_comment(message: Message, state: FSMContext):
-    await state.update_data(comment=message.text)
-    await state.set_state(ImportantForm.date)
-    await message.answer("📅 Дата события (ГГГГ-ММ-ДД):")
-
-@router.message(ImportantForm.date)
-async def imp_date(message: Message, state: FSMContext):
-    try:
-        datetime.strptime(message.text, "%Y-%m-%d")
-    except ValueError:
-        await message.answer("Неверный формат. Пример: 2026-11-20")
-        return
-    data = await state.get_data()
-    await add_important(data["subject"], data["title"], data["comment"], message.text)
-    await state.clear()
-    
-    await message.answer(
-        f"✅ Важное добавлено по «{data['subject']}».",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⚠️ Посмотреть всё важное", callback_data="all_important")],
-            [InlineKeyboardButton(text="⬅️ В главное меню", callback_data="main_menu")]
-        ])
-    )
-
-@router.callback_query(F.data.startswith("imp_list:"))
-async def cb_imp_list(cb: CallbackQuery):
-    idx = int(cb.data.split(":")[1])
-    subj = SUBJECTS[idx]
-    rows = await get_important(subj)
-    
-    kb_back = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data=f"subj:{idx}")]])
-    
-    if not rows:
-        await cb.message.edit_text(f"По «{subj}» важного нет.", reply_markup=kb_back)
-    else:
-        text = f"📌 <b>Важное по «{subj}»:</b>\n\n"
-        buttons = []
-        for item_id, s, title, comment, d in rows:
-            text += f"[{item_id}] <b>{title}</b>\n   {comment or ''}\n   {d or ''}\n\n"
-            buttons.append([InlineKeyboardButton(text=f"🗑 Удалить запись [{item_id}]", callback_data=f"imp_del:{item_id}")])
-        
-        buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"subj:{idx}")])
-        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    await cb.answer()
-
-@router.callback_query(F.data == "edit_sched")
-async def cb_edit_sched(cb: CallbackQuery, state: FSMContext):
-    await state.set_state(OverrideForm.date)
-    await cb.message.answer("✏️ Введи дату занятия (ГГГГ-ММ-ДД):")
-    await cb.answer()
-
-@router.message(OverrideForm.date)
-async def ov_date(message: Message, state: FSMContext):
-    try:
-        datetime.strptime(message.text, "%Y-%m-%d")
-    except ValueError:
-        await message.answer("Неверный формат. Пример: 2026-11-15")
-        return
-    await state.update_data(date=message.text)
-    await state.set_state(OverrideForm.subject)
-    await message.answer("Какой предмет? (напиши название как в расписании)")
-
-@router.message(OverrideForm.subject)
-async def ov_subject(message: Message, state: FSMContext):
-    await state.update_data(subject=message.text)
-    await state.set_state(OverrideForm.action)
-    await message.answer("Что произошло?\nНапиши: <b>отмена</b>, <b>перенос</b> или <b>добавить</b>", parse_mode="HTML")
-
-@router.message(OverrideForm.action)
-async def ov_action(message: Message, state: FSMContext):
-    action_map = {"отмена": "cancel", "перенос": "move", "добавить": "add"}
-    act = action_map.get(message.text.lower().strip())
-    if not act:
-        await message.answer("Напиши: отмена / перенос / добавить")
-        return
-    await state.update_data(action=act)
-    if act in ["move", "add"]:
-        await state.set_state(OverrideForm.new_date)
-        await message.answer("На какую дату? ГГГГ-ММ-ДД")
-    else:
-        await state.set_state(OverrideForm.comment)
-        await message.answer("Комментарий (например: НО МЕНЕДЖМЕНТА НЕ БУДЕТ, или напиши «-»):")
-
-@router.message(OverrideForm.new_date)
-async def ov_new_date(message: Message, state: FSMContext):
-    try:
-        datetime.strptime(message.text, "%Y-%m-%d")
-    except ValueError:
-        await message.answer("Неверный формат. Пример: 2026-11-15")
-        return
-    await state.update_data(new_date=message.text)
-    await state.set_state(OverrideForm.comment)
-    await message.answer("Комментарий (можно «-»):")
-
-@router.message(OverrideForm.comment)
-async def ov_comment(message: Message, state: FSMContext):
-    data = await state.get_data()
-    comment = None if message.text.strip() == "-" else message.text
-    await add_override(data["date"], data["subject"], data["action"], data.get("new_date"), comment)
-    await state.clear()
-    await message.answer("✅ Изменение расписания сохранено.", reply_markup=main_menu_keyboard())
-
-@router.message(F.text)
-async def handle_text(message: Message):
-    text = message.text.lower()
-    triggers = ["пришли", "отправь", "дай", "скинь", "найди", "покажи"]
-    if any(t in text for t in triggers):
-        keyword = text
-        for t in triggers:
-            keyword = keyword.replace(t, "")
-        keyword = keyword.replace("мне", "").replace("по", "").strip()
-        files = await search_files_by_keyword(keyword)
-        if not files:
-            await message.answer(f"Ничего не нашёл по «{keyword}».")
-            return
-        for file_id, name in files:
-            await message.answer_document(file_id, caption=name)
-        return
-    await message.answer("Я тебя не понял. Воспользуйся меню /start.", reply_markup=main_menu_keyboard())
+    await
